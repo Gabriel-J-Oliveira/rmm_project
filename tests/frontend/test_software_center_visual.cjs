@@ -47,7 +47,10 @@ const {chromium} = require('playwright');
         await page.getByRole('tab', {name: 'Uploads'}).click();
         await page.getByRole('heading', {name: 'Instaladores cadastrados'}).waitFor();
         await page.getByRole('link', {name: 'Visual Installer'}).waitFor();
-        await page.getByRole('tab', {name: 'Softwares coletados'}).click();
+        const inventoryTab = page.locator('[data-software-tab="inventory"]');
+        await inventoryTab.click();
+        assert.match(await inventoryTab.innerText(), /Softwares coletados/, 'The inventory tab keeps its visible label after switching tabs');
+        assert.equal(await inventoryTab.getAttribute('aria-selected'), 'true');
 
         const visualAppCard = page.locator('[data-software-inventory] .software-collected-card').filter({hasText: 'Visual App'});
         await visualAppCard.getByRole('button', {name: /Ver endpoints/}).click();
@@ -164,7 +167,8 @@ const {chromium} = require('playwright');
             });
             assert.fail('Software page must not overflow horizontally on mobile: ' + JSON.stringify({mobileBounds, overflow}));
         }
-        await page.getByRole('tab', {name: 'Softwares coletados'}).click();
+        await inventoryTab.click();
+        assert.match(await inventoryTab.innerText(), /Softwares coletados/, 'The inventory tab remains labeled on mobile');
         await page.screenshot({path: path.join(out, 'software-inventory-mobile.png'), fullPage: true});
         assert.deepEqual(errors, []);
         assert.ok(writes.length >= 4, 'The UI must persist package operations through authenticated APIs');

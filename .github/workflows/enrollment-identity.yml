@@ -77,12 +77,16 @@ jobs:
           node --test tests/frontend/test_alert_policies.cjs
           node --test tests/frontend/test_noc_refresh.cjs
           python manage.py test dashboard.test_alert_policies dashboard.test_execution_policies --noinput
+      - name: Software package API and profile contracts
+        run: >-
+          python manage.py test
+          dashboard.test_software_package_api.SoftwarePackageApiTests
+          --noinput --verbosity 1
       - name: Identity, ingestion, lifecycle and enrollment regressions
         run: >-
           python manage.py test agents dashboard.test_remote_install_enrollment
           dashboard.test_agent_install_workflow dashboard.test_noc_operations
           dashboard.test_noc_notifications dashboard.test_software_center
-          dashboard.test_software_package_api
           config.test_runtime_environment
           config.test_operational_continuity
           --exclude-tag windows_e2e --noinput --verbosity 1
@@ -92,7 +96,9 @@ jobs:
           python manage.py test
           agents.test_enrollment_identity.PostgreSQLEnrollmentIdentityTests
           agents.test_enrollment_identity.IdentityAuditTests
-          agents.test_manual_batch_postgresql --noinput --verbosity 2
+          agents.test_manual_batch_postgresql
+          dashboard.test_software_package_api.SoftwarePackageConcurrencyTests
+          --noinput --verbosity 2
 
   windows-e2e:
     name: Windows .NET and terminal E2E
