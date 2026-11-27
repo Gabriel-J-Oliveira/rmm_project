@@ -236,8 +236,8 @@ NIGHTOWL_SOFTWARE_PACKAGE_STORAGE_ROOT = Path(env(
 NIGHTOWL_SOFTWARE_PACKAGE_MAX_UPLOAD_BYTES = env.int(
     'NIGHTOWL_SOFTWARE_PACKAGE_MAX_UPLOAD_BYTES', default=1024 * 1024 * 1024,
 )
-# RC49-03C-A only prepares profiles. There is no software-operation dispatch
-# endpoint until an agent with the versioned profile capability is available.
+# RC49-03C-B1 provides server contracts, but dispatch stays fail-closed until an
+# explicitly compatible MSI executor is deployed and the operator enables it.
 NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED = env.bool(
     'NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED', default=False,
 )

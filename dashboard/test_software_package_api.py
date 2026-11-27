@@ -8,16 +8,22 @@ from threading import Barrier
 from unittest import skipUnless
 from uuid import UUID
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import connection
+from django.db import close_old_connections, connection
 from django.test import Client, TransactionTestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
-from agents.models import AgentJob, AgentMachine, AuditEvent, InventorySnapshot, SoftwarePackageRecord
-from agents.software_operation_contract import SoftwareOperationBlocked, prepare_software_operation_snapshot
+from agents.models import AgentJob, AgentJobResultReceipt, AgentMachine, AuditEvent, InventorySnapshot, SoftwarePackageOperation, SoftwarePackageRecord, hash_agent_token
+from agents.internal_jobs import required_internal_capability, validate_internal_payload
+from agents.software_operation_contract import (
+    SoftwareOperationBlocked, create_software_operation_job,
+    prepare_software_operation_snapshot,
+)
 from agents.software_execution_profiles import package_profile_binding_matches
 
 
@@ -493,17 +499,367 @@ class SoftwarePackageApiTests(TransactionTestCase):
 
     def _endpoint_with_software_capability(self, capability=True):
         from django.utils import timezone
+        token = 'synthetic-software-agent-token'
         endpoint = AgentMachine.objects.create(
-            hostname='SOFTWARE-CAP-TEST', machine_id='software-cap-machine-01', agent_token_hash='c' * 64,
+            hostname='SOFTWARE-CAP-TEST', machine_id='software-cap-machine-01', agent_token_hash=hash_agent_token(token),
             status=AgentMachine.STATUS_ONLINE, last_seen_at=timezone.now(), agent_version='03c-a-test',
         )
-        capabilities = ['software_install_profile:1'] if capability else []
+        capabilities = ['software_msi_install:1'] if capability else []
         InventorySnapshot.objects.create(
             machine=endpoint, hostname=endpoint.hostname, collected_at=timezone.now(), received_at=timezone.now(),
             raw_payload={'snapshot_source': 'heartbeat', 'machine_id': endpoint.machine_id,
                          'agent_version': endpoint.agent_version, 'agent': {'capabilities': capabilities}},
         )
+        endpoint.test_agent_token = token
         return endpoint
+
+    def test_versioned_software_operation_materializes_one_immutable_job_and_replays_idempotently(self):
+        from uuid import uuid4
+        package = self._approved_profile_package()
+        endpoint = self._endpoint_with_software_capability()
+        request_id = str(uuid4())
+        before_jobs = AgentJob.objects.count()
+        operation, created = create_software_operation_job(
+            self.operator, endpoint.pk, package.pk, 'install', request_id,
+        )
+        replay, replay_created = create_software_operation_job(
+            self.operator, endpoint.pk, package.pk, 'install', request_id,
+        )
+        self.assertTrue(created)
+        self.assertFalse(replay_created)
+        self.assertEqual(operation.pk, replay.pk)
+        self.assertEqual(operation.job_id, replay.job_id)
+        self.assertEqual(AgentJob.objects.count(), before_jobs + 1)
+        self.assertEqual(operation.job.payload, {
+            'schema_version': 2,
+            'operation_id': str(operation.pk),
+            'operation': 'install',
+            'request_id': request_id,
+            'package_uuid': str(package.pk),
+            'artifact_sha256': package.sha256,
+            'artifact_revision': package.artifact_revision,
+            'profile_revision': package.execution_profile_revision,
+            'profile_sha256': package.execution_profile_sha256,
+        })
+        self.assertEqual(operation.endpoint_uuid_snapshot, endpoint.pk)
+        self.assertEqual(operation.machine_id_snapshot, endpoint.machine_id)
+        self.assertEqual(operation.operator_id, self.operator.pk)
+        self.assertEqual(operation.snapshot['package']['artifact_sha256'], package.sha256)
+        self.assertTrue(AuditEvent.objects.filter(event_type='software_package.operation_queued').exists())
+        denied_delete = self.client.post(reverse('software-package-delete', kwargs={'pk': package.pk}),
+            data=json.dumps({'revision': package.revision, 'reason': 'Preserve operation history'}),
+            content_type='application/json')
+        self.assertEqual(denied_delete.status_code, 409)
+        operation.snapshot = {**operation.snapshot, 'tampered': True}
+        with self.assertRaisesMessage(ValueError, 'software_operation_snapshot_immutable'):
+            operation.save()
+
+    def test_operation_api_materializes_idempotently_but_default_gate_keeps_job_queued(self):
+        from uuid import uuid4
+        package = self._approved_profile_package()
+        endpoint = self._endpoint_with_software_capability()
+        url = reverse('api-software-operation-create', kwargs={
+            'package_id': package.pk, 'endpoint_id': endpoint.pk,
+        })
+        request_id = str(uuid4())
+        body = json.dumps({'request_id': request_id, 'operation': 'install'})
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(self.operator)
+        csrf_denied = csrf_client.post(url, body, content_type='application/json')
+        self.assertEqual(csrf_denied.status_code, 403)
+        self.assertEqual(AgentJob.objects.count(), 0)
+        first = self.client.post(url, body, content_type='application/json')
+        replay = self.client.post(url, body, content_type='application/json')
+        self.assertEqual(first.status_code, 202, first.content)
+        self.assertEqual(replay.status_code, 200, replay.content)
+        self.assertEqual(first.json()['job_id'], replay.json()['job_id'])
+        self.assertEqual(AgentJob.objects.count(), 1)
+        operation = SoftwarePackageOperation.objects.get(pk=first.json()['operation_id'])
+        agent = Client(HTTP_AUTHORIZATION=f'Bearer {endpoint.test_agent_token}')
+        pull = agent.get(reverse('agent-jobs-pull'), HTTP_X_NIGHTOWL_JOB_PROTOCOL='2')
+        self.assertEqual(pull.json()['jobs'], [])
+        operation.job.refresh_from_db()
+        self.assertEqual(operation.job.status, AgentJob.STATUS_QUEUED)
+        with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
+            pull = agent.get(reverse('agent-jobs-pull'), HTTP_X_NIGHTOWL_JOB_PROTOCOL='2')
+        self.assertEqual(len(pull.json()['jobs']), 1)
+
+    def test_software_operation_api_requires_its_explicit_operator_permission(self):
+        from uuid import uuid4
+        user = get_user_model().objects.create_user('limited-software-operator')
+        client = Client()
+        client.force_login(user)
+        url = reverse('api-software-operation-create', kwargs={
+            'package_id': uuid4(), 'endpoint_id': uuid4(),
+        })
+        with override_settings(NIGHTOWL_TECHNICAL_USERNAMES={'limited-software-operator'}):
+            response = client.post(url, json.dumps({
+                'request_id': str(uuid4()), 'operation': 'install',
+            }), content_type='application/json')
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(AgentJob.objects.count(), 0)
+
+    def test_agent_download_is_streamed_private_and_scoped_to_the_job_endpoint(self):
+        from uuid import uuid4
+        package = self._approved_profile_package()
+        endpoint = self._endpoint_with_software_capability()
+        with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
+            operation, _ = create_software_operation_job(
+                self.operator, endpoint.pk, package.pk, 'install', str(uuid4()),
+            )
+            agent = Client(HTTP_AUTHORIZATION=f'Bearer {endpoint.test_agent_token}')
+            pull = agent.get(reverse('agent-jobs-pull'), HTTP_X_NIGHTOWL_JOB_PROTOCOL='2')
+            self.assertEqual(pull.status_code, 200)
+            self.assertEqual(pull.json()['jobs'][0]['id'], str(operation.job_id))
+
+            other, other_token = AgentMachine.create_with_token(
+                hostname='SOFTWARE-OTHER', machine_id='software-other-machine',
+                status=AgentMachine.STATUS_ONLINE, last_seen_at=timezone.now(), agent_version='03c-a-test',
+            )
+            url = reverse('agent-software-operation-artifact', kwargs={'job_id': operation.job_id})
+            anonymous = Client().get(url)
+            self.assertIn(anonymous.status_code, (401, 403))
+            query_only = Client().get(url + '?token=' + endpoint.test_agent_token)
+            self.assertIn(query_only.status_code, (401, 403))
+            cross = Client(HTTP_AUTHORIZATION=f'Bearer {other_token}').get(url)
+            self.assertEqual(cross.status_code, 404)
+            downloaded = agent.get(url)
+            self.assertEqual(downloaded.status_code, 200)
+            self.assertTrue(downloaded.streaming)
+            self.assertEqual(b''.join(downloaded.streaming_content), msi_bytes())
+            self.assertEqual(downloaded['X-Software-Artifact-SHA256'], package.sha256)
+            self.assertEqual(downloaded['Cache-Control'], 'private, no-store')
+            self.assertTrue(AuditEvent.objects.filter(
+                event_type='software_package.operation_artifact_downloaded', endpoint=endpoint,
+            ).exists())
+            self.assertFalse(AuditEvent.objects.filter(
+                event_type='software_package.operation_artifact_downloaded', endpoint=other,
+            ).exists())
+
+    def test_revoked_package_is_cancelled_before_pull_and_active_operation_blocks_replacement(self):
+        from uuid import uuid4
+        package = self._approved_profile_package()
+        endpoint = self._endpoint_with_software_capability()
+        with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
+            operation, _ = create_software_operation_job(
+                self.operator, endpoint.pk, package.pk, 'install', str(uuid4()),
+            )
+        package.approval_status = SoftwarePackageRecord.STATUS_REVOKED
+        package.save(update_fields=['approval_status'])
+        agent = Client(HTTP_AUTHORIZATION=f'Bearer {endpoint.test_agent_token}')
+        with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
+            self.assertEqual(agent.get(reverse('agent-jobs-pull'), HTTP_X_NIGHTOWL_JOB_PROTOCOL='2').json()['jobs'], [])
+        operation.job.refresh_from_db()
+        self.assertEqual(operation.job.status, AgentJob.STATUS_CANCELLED)
+        self.assertEqual(operation.job.error_code, 'SOFTWARE_OPERATION_AUTHORIZATION_REVOKED')
+        self.assertTrue(AuditEvent.objects.filter(event_type='software_package.operation_dispatch_blocked').exists())
+
+        # Active records prevent both replacement and permanent deletion even if
+        # the legacy payload fields are absent.
+        operation.job.status = AgentJob.STATUS_RUNNING
+        operation.job.save(update_fields=['status'])
+        replacement = self.client.post(reverse('software-package-replace', kwargs={'pk': package.pk}), {
+            'revision': package.revision, 'reason': 'active operation test',
+            'file': SimpleUploadedFile('new.msi', msi_bytes(1024)),
+        })
+        self.assertEqual(replacement.status_code, 409)
+
+    def test_capability_revocation_before_pull_cancels_the_queued_operation(self):
+        from uuid import uuid4
+        package = self._approved_profile_package()
+        endpoint = self._endpoint_with_software_capability()
+        with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
+            operation, _ = create_software_operation_job(
+                self.operator, endpoint.pk, package.pk, 'install', str(uuid4()),
+            )
+            InventorySnapshot.objects.create(
+                machine=endpoint, hostname=endpoint.hostname, collected_at=timezone.now(),
+                received_at=timezone.now(), raw_payload={
+                    'snapshot_source': 'heartbeat', 'machine_id': endpoint.machine_id,
+                    'agent_version': endpoint.agent_version, 'agent': {'capabilities': []},
+                },
+            )
+            agent = Client(HTTP_AUTHORIZATION=f'Bearer {endpoint.test_agent_token}')
+            self.assertEqual(agent.get(reverse('agent-jobs-pull'), HTTP_X_NIGHTOWL_JOB_PROTOCOL='2').json()['jobs'], [])
+        operation.job.refresh_from_db()
+        self.assertEqual(operation.job.status, AgentJob.STATUS_CANCELLED)
+        self.assertEqual(operation.job.error_code, 'SOFTWARE_OPERATION_AUTHORIZATION_REVOKED')
+
+    def test_operator_permission_revocation_before_pull_cancels_the_queued_operation(self):
+        from uuid import uuid4
+        package = self._approved_profile_package()
+        endpoint = self._endpoint_with_software_capability()
+        operator = get_user_model().objects.create_user('software-operation-revocable')
+        operator.user_permissions.add(Permission.objects.get(codename='execute_softwarepackageoperation'))
+        operator = get_user_model().objects.get(pk=operator.pk)
+        with override_settings(NIGHTOWL_TECHNICAL_USERNAMES={'software-operation-revocable'}):
+            with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
+                operation, _ = create_software_operation_job(
+                    operator, endpoint.pk, package.pk, 'install', str(uuid4()),
+                )
+            operator.user_permissions.clear()
+            operator = get_user_model().objects.get(pk=operator.pk)
+            agent = Client(HTTP_AUTHORIZATION=f'Bearer {endpoint.test_agent_token}')
+            with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
+                self.assertEqual(agent.get(
+                    reverse('agent-jobs-pull'), HTTP_X_NIGHTOWL_JOB_PROTOCOL='2',
+                ).json()['jobs'], [])
+        operation.job.refresh_from_db()
+        self.assertEqual(operation.job.status, AgentJob.STATUS_CANCELLED)
+        self.assertEqual(operation.job.error_code, 'SOFTWARE_OPERATION_AUTHORIZATION_REVOKED')
+
+    def test_artifact_integrity_is_rechecked_before_the_agent_receives_the_job(self):
+        from uuid import uuid4
+        package = self._approved_profile_package()
+        endpoint = self._endpoint_with_software_capability()
+        with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
+            operation, _ = create_software_operation_job(
+                self.operator, endpoint.pk, package.pk, 'install', str(uuid4()),
+            )
+            private_path = Path(self.temp.name) / 'private-store' / package.artifact_key
+            private_path.write_bytes(msi_bytes(1024))
+            agent = Client(HTTP_AUTHORIZATION=f'Bearer {endpoint.test_agent_token}')
+            self.assertEqual(agent.get(reverse('agent-jobs-pull'), HTTP_X_NIGHTOWL_JOB_PROTOCOL='2').json()['jobs'], [])
+        operation.job.refresh_from_db()
+        self.assertEqual(operation.job.status, AgentJob.STATUS_CANCELLED)
+        self.assertEqual(operation.job.error_code, 'SOFTWARE_OPERATION_AUTHORIZATION_REVOKED')
+
+    def test_v2_ack_requires_verified_product_evidence_and_replay_is_idempotent(self):
+        from uuid import uuid4
+        package = self._approved_profile_package()
+        endpoint = self._endpoint_with_software_capability()
+        with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
+            operation, _ = create_software_operation_job(
+                self.operator, endpoint.pk, package.pk, 'install', str(uuid4()),
+            )
+            agent = Client(HTTP_AUTHORIZATION=f'Bearer {endpoint.test_agent_token}')
+            agent.get(reverse('agent-jobs-pull'), HTTP_X_NIGHTOWL_JOB_PROTOCOL='2')
+            payload = operation.job.payload
+            valid = {
+                'schema_version': 2, 'operation_id': str(operation.pk), 'operation': 'install',
+                'request_id': str(operation.request_id), 'package_uuid': str(package.pk),
+                'artifact_sha256': package.sha256, 'artifact_revision': package.artifact_revision,
+                'profile_revision': package.execution_profile_revision,
+                'profile_sha256': package.execution_profile_sha256, 'phase': 'verified',
+                'verified': True, 'success': True, 'exit_code': 0, 'reboot_pending': False,
+                'evidence': {'method': 'msi_product_code',
+                             'product_code': valid_msi_profile()['install']['product_code'],
+                             'version': valid_msi_profile()['expected_version'], 'installed': True},
+            }
+            url = reverse('agent-jobs-result')
+            base = {'job_id': str(operation.job_id), 'machine_id': endpoint.machine_id,
+                    'status': 'completed', 'result': {'machine_id': endpoint.machine_id, 'output': valid,
+                                                       'error_code': 'MSI_VERIFICATION_RECORDED'}}
+            invalid = {**base, 'result': {'machine_id': endpoint.machine_id,
+                      'output': {'schema_version': 2, 'success': True, 'exit_code': 0}}}
+            rejected = agent.post(url, invalid, content_type='application/json', HTTP_IDEMPOTENCY_KEY='software-ack-invalid')
+            self.assertEqual(rejected.status_code, 400)
+            self.assertFalse(AgentJobResultReceipt.objects.filter(result_id='software-ack-invalid').exists())
+            invalid_error = {**base, 'result': {**base['result'], 'error_code': 'invalid code!'}}
+            rejected_error = agent.post(url, invalid_error, content_type='application/json',
+                                        HTTP_IDEMPOTENCY_KEY='software-ack-invalid-error')
+            self.assertEqual(rejected_error.status_code, 400, rejected_error.content)
+            self.assertFalse(AgentJobResultReceipt.objects.filter(result_id='software-ack-invalid-error').exists())
+            for _ in range(2):
+                ack = agent.post(url, base, content_type='application/json', HTTP_IDEMPOTENCY_KEY='software-ack-valid')
+                self.assertEqual(ack.status_code, 200, ack.content)
+            operation.job.refresh_from_db()
+            self.assertEqual(operation.job.status, AgentJob.STATUS_COMPLETED)
+            self.assertEqual(AgentJobResultReceipt.objects.filter(result_id='software-ack-valid').count(), 1)
+
+    def test_queued_software_operation_rejects_success_and_failure_ack_when_dispatch_is_disabled(self):
+        from uuid import uuid4
+        package = self._approved_profile_package()
+        endpoint = self._endpoint_with_software_capability()
+        operation, _ = create_software_operation_job(
+            self.operator, endpoint.pk, package.pk, 'install', str(uuid4()),
+        )
+        self.assertFalse(settings.NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED)
+        agent = Client(HTTP_AUTHORIZATION=f'Bearer {endpoint.test_agent_token}')
+        success_evidence = {
+            'schema_version': 2, 'operation_id': str(operation.pk), 'operation': 'install',
+            'request_id': str(operation.request_id), 'package_uuid': str(package.pk),
+            'artifact_sha256': package.sha256, 'artifact_revision': package.artifact_revision,
+            'profile_revision': package.execution_profile_revision,
+            'profile_sha256': package.execution_profile_sha256, 'phase': 'verified',
+            'verified': True, 'success': True, 'exit_code': 0, 'reboot_pending': False,
+            'evidence': {'method': 'msi_product_code',
+                         'product_code': valid_msi_profile()['install']['product_code'],
+                         'version': valid_msi_profile()['expected_version'], 'installed': True},
+        }
+        url = reverse('agent-jobs-result')
+        success_ack = agent.post(url, {
+            'job_id': str(operation.job_id), 'machine_id': endpoint.machine_id,
+            'status': 'completed',
+            'result': {'machine_id': endpoint.machine_id, 'output': success_evidence},
+        }, content_type='application/json', HTTP_IDEMPOTENCY_KEY='software-queued-success')
+        self.assertEqual(success_ack.status_code, 409, success_ack.content)
+        self.assertEqual(success_ack.json()['error'], 'software_operation_not_dispatched')
+        failure_ack = agent.post(url, {
+            'job_id': str(operation.job_id), 'machine_id': endpoint.machine_id,
+            'status': 'failed', 'error_code': 'MSI_EXECUTION_FAILED',
+            'result': {'machine_id': endpoint.machine_id, 'error_code': 'MSI_EXECUTION_FAILED'},
+        }, content_type='application/json', HTTP_IDEMPOTENCY_KEY='software-queued-failure')
+        self.assertEqual(failure_ack.status_code, 409, failure_ack.content)
+        self.assertEqual(failure_ack.json()['error'], 'software_operation_not_dispatched')
+        operation.job.refresh_from_db()
+        self.assertEqual(operation.job.status, AgentJob.STATUS_QUEUED)
+        self.assertFalse(AgentJobResultReceipt.objects.filter(
+            result_id__in=['software-queued-success', 'software-queued-failure'],
+        ).exists())
+
+    def test_dispatched_software_operation_accepts_valid_error_code_and_replay(self):
+        from uuid import uuid4
+        package = self._approved_profile_package()
+        endpoint = self._endpoint_with_software_capability()
+        with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
+            operation, _ = create_software_operation_job(
+                self.operator, endpoint.pk, package.pk, 'install', str(uuid4()),
+            )
+            agent = Client(HTTP_AUTHORIZATION=f'Bearer {endpoint.test_agent_token}')
+            dispatched = agent.get(reverse('agent-jobs-pull'), HTTP_X_NIGHTOWL_JOB_PROTOCOL='2')
+            self.assertEqual(len(dispatched.json()['jobs']), 1)
+            evidence = {
+                'schema_version': 2, 'operation_id': str(operation.pk), 'operation': 'install',
+                'request_id': str(operation.request_id), 'package_uuid': str(package.pk),
+                'artifact_sha256': package.sha256, 'artifact_revision': package.artifact_revision,
+                'profile_revision': package.execution_profile_revision,
+                'profile_sha256': package.execution_profile_sha256, 'phase': 'verified',
+                'verified': True, 'success': True, 'exit_code': 0, 'reboot_pending': False,
+                'evidence': {'method': 'msi_product_code',
+                             'product_code': valid_msi_profile()['install']['product_code'],
+                             'version': valid_msi_profile()['expected_version'], 'installed': True},
+            }
+            ack_payload = {
+                'job_id': str(operation.job_id), 'machine_id': endpoint.machine_id,
+                'status': 'completed',
+                'result': {'machine_id': endpoint.machine_id, 'output': evidence,
+                           'error_code': 'MSI_VERIFICATION_RECORDED'},
+            }
+            url = reverse('agent-jobs-result')
+            ack = agent.post(url, ack_payload, content_type='application/json',
+                             HTTP_IDEMPOTENCY_KEY='software-valid-error-code')
+            self.assertEqual(ack.status_code, 200, ack.content)
+            replay = agent.post(url, ack_payload, content_type='application/json',
+                                HTTP_IDEMPOTENCY_KEY='software-valid-error-code')
+            self.assertEqual(replay.status_code, 200, replay.content)
+            self.assertTrue(replay.json()['duplicate'])
+            operation.job.refresh_from_db()
+            self.assertEqual(operation.job.status, AgentJob.STATUS_COMPLETED)
+            self.assertEqual(AgentJobResultReceipt.objects.filter(result_id='software-valid-error-code').count(), 1)
+
+    def test_legacy_install_software_v1_payload_and_capability_contract_remain_unchanged(self):
+        payload = {'package_id': 'legacy-package_1'}
+        with override_settings(NIGHTOWL_APPROVED_SOFTWARE_IDS=['legacy-package_1']):
+            self.assertEqual(validate_internal_payload('install_software', payload), payload)
+        self.assertEqual(required_internal_capability('install_software', payload), 'install_software')
+        self.assertEqual(required_internal_capability('install_software', {
+            'schema_version': 2, 'operation': 'install', 'operation_id': '00000000-0000-4000-8000-000000000001',
+            'request_id': '00000000-0000-4000-8000-000000000002',
+            'package_uuid': '00000000-0000-4000-8000-000000000003',
+            'artifact_sha256': 'a' * 64, 'artifact_revision': 1,
+            'profile_revision': 1, 'profile_sha256': 'b' * 64,
+        }), 'software_msi_install:1')
 
     def test_operation_snapshot_binds_endpoint_package_profile_and_request_without_creating_job(self):
         from uuid import uuid4
@@ -552,13 +908,9 @@ class SoftwarePackageApiTests(TransactionTestCase):
         package = self._approved_profile_package()
         endpoint = self._endpoint_with_software_capability(capability=False)
         before = AgentJob.objects.count()
-        with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
-            with self.assertRaises(SoftwareOperationBlocked) as blocked:
-                prepare_software_operation_snapshot(self.operator, endpoint.pk, package.pk, 'install', str(uuid4()))
-        self.assertEqual(blocked.exception.code, 'agent_capability_unconfirmed')
-        with self.assertRaises(SoftwareOperationBlocked) as disabled:
+        with self.assertRaises(SoftwareOperationBlocked) as blocked:
             prepare_software_operation_snapshot(self.operator, endpoint.pk, package.pk, 'install', str(uuid4()))
-        self.assertEqual(disabled.exception.code, 'software_dispatch_not_enabled')
+        self.assertEqual(blocked.exception.code, 'agent_capability_unconfirmed')
         self.assertEqual(AgentJob.objects.count(), before)
 
     def test_operation_snapshot_rejects_ambiguous_identity_and_active_job(self):
@@ -648,13 +1000,17 @@ class SoftwarePackageConcurrencyTests(TransactionTestCase):
         gate = Barrier(2)
 
         def replace(name, content):
-            client = Client()
-            client.force_login(self.operator)
-            gate.wait(timeout=10)
-            return client.post(reverse('software-package-replace', kwargs={'pk': self.package_id}), {
-                'revision': 1, 'reason': 'Concurrent replacement test',
-                'file': SimpleUploadedFile(name, content),
-            }).status_code
+            close_old_connections()
+            try:
+                client = Client()
+                client.force_login(self.operator)
+                gate.wait(timeout=10)
+                return client.post(reverse('software-package-replace', kwargs={'pk': self.package_id}), {
+                    'revision': 1, 'reason': 'Concurrent replacement test',
+                    'file': SimpleUploadedFile(name, content),
+                }).status_code
+            finally:
+                close_old_connections()
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             futures = [pool.submit(replace, 'a.exe', exe_bytes()), pool.submit(replace, 'b.msi', msi_bytes())]
@@ -672,13 +1028,17 @@ class SoftwarePackageConcurrencyTests(TransactionTestCase):
         gate = Barrier(2)
 
         def save_profile():
-            client = Client()
-            client.force_login(self.operator)
-            gate.wait(timeout=10)
-            return client.post(reverse('software-package-profile', kwargs={'pk': self.package_id}),
-                data=json.dumps({'revision': 1, 'reason': 'Concurrent profile review',
-                                 'execution_profile': valid_msi_profile()}),
-                content_type='application/json').status_code
+            close_old_connections()
+            try:
+                client = Client()
+                client.force_login(self.operator)
+                gate.wait(timeout=10)
+                return client.post(reverse('software-package-profile', kwargs={'pk': self.package_id}),
+                    data=json.dumps({'revision': 1, 'reason': 'Concurrent profile review',
+                                     'execution_profile': valid_msi_profile()}),
+                    content_type='application/json').status_code
+            finally:
+                close_old_connections()
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             statuses = sorted(future.result(timeout=40) for future in [pool.submit(save_profile), pool.submit(save_profile)])
@@ -687,3 +1047,67 @@ class SoftwarePackageConcurrencyTests(TransactionTestCase):
         self.assertEqual(package.revision, 2)
         self.assertEqual(package.execution_profile_revision, 1)
         self.assertEqual(AuditEvent.objects.filter(event_type='software_package.profile_updated').count(), 1)
+
+    def test_concurrent_same_request_id_materializes_exactly_one_software_job(self):
+        from uuid import uuid4
+        from agents.software_operation_contract import create_software_operation_job
+
+        package = SoftwarePackageRecord.objects.get(pk=self.package_id)
+        self.assertEqual(self._client_post_package_action('software-package-approve', package, {
+            'revision': package.revision, 'reason': 'Concurrent operation test',
+        }).status_code, 200)
+        package.refresh_from_db()
+        self.assertEqual(self._client_post_package_action('software-package-profile', package, {
+            'revision': package.revision, 'reason': 'Concurrent operation test',
+            'execution_profile': valid_msi_profile(),
+        }).status_code, 200)
+        package.refresh_from_db()
+        self.assertEqual(self._client_post_package_action('software-package-profile-approve', package, {
+            'revision': package.revision, 'reason': 'Concurrent operation test',
+        }).status_code, 200)
+
+        token = 'synthetic-software-concurrency-token'
+        endpoint = AgentMachine.objects.create(
+            hostname='SOFTWARE-CONCURRENT', machine_id='software-concurrent-machine',
+            agent_token_hash=hash_agent_token(token), status=AgentMachine.STATUS_ONLINE,
+            last_seen_at=timezone.now(), agent_version='03c-b1-test',
+        )
+        InventorySnapshot.objects.create(
+            machine=endpoint, hostname=endpoint.hostname, collected_at=timezone.now(),
+            received_at=timezone.now(), raw_payload={
+                'snapshot_source': 'heartbeat', 'machine_id': endpoint.machine_id,
+                'agent_version': endpoint.agent_version,
+                'agent': {'capabilities': ['software_msi_install:1']},
+            },
+        )
+        request_id = str(uuid4())
+        barrier = Barrier(2)
+
+        def materialize():
+            close_old_connections()
+            try:
+                barrier.wait(timeout=10)
+                operator = get_user_model().objects.get(pk=self.operator.pk)
+                operation, created = create_software_operation_job(
+                    operator, endpoint.pk, package.pk, 'install', request_id,
+                )
+                return str(operation.pk), operation.job_id, created
+            finally:
+                close_old_connections()
+
+        with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = [future.result(timeout=45) for future in [
+                    pool.submit(materialize), pool.submit(materialize),
+                ]]
+        self.assertEqual(results[0][0], results[1][0])
+        self.assertEqual(results[0][1], results[1][1])
+        self.assertEqual(sorted(item[2] for item in results), [False, True])
+        self.assertEqual(SoftwarePackageOperation.objects.filter(request_id=request_id).count(), 1)
+        self.assertEqual(AgentJob.objects.filter(endpoint=endpoint, job_type=AgentJob.TYPE_INSTALL_SOFTWARE).count(), 1)
+
+    def _client_post_package_action(self, name, package, body):
+        client = Client()
+        client.force_login(self.operator)
+        url = reverse(name, kwargs={'pk': package.pk})
+        return client.post(url, data=json.dumps(body), content_type='application/json')
