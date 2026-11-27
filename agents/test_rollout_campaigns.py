@@ -127,6 +127,23 @@ class CampaignTests(TestCase):
             AgentRolloutCoverageRound.objects.create(
                 **{**values, 'sequence': 2, 'total_candidates': 1})
 
+    def test_coverage_execution_campaign_is_unique_and_optional_for_legacy_rounds(self):
+        campaign = self.create()
+        values = dict(campaign=campaign, cohort_schema=1, cohort_hash='b' * 64,
+                      evaluated_at=self.now, created_by=self.actor, reason='Synthetic review',
+                      target_snapshot=[], total_candidates=0, eligible_count=0,
+                      excluded_count=0, already_current_count=0)
+        first = AgentRolloutCoverageRound.objects.create(sequence=1, **values)
+        self.assertIsNone(first.execution_campaign_id)
+        transition_campaign(campaign, 'aborted', self.actor, 'Synthetic historical campaign', now=self.now)
+        executor = self.create()
+        first.execution_campaign = executor
+        first.save(update_fields=['execution_campaign'])
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            AgentRolloutCoverageRound.objects.create(sequence=2, execution_campaign=executor, **values)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            AgentRolloutCoverageRound.objects.create(sequence=2, execution_campaign=campaign, **values)
+
     def test_promoted_release_snapshot_freezes_both_channels(self):
         self.machine.update_channel = 'pilot'
         self.machine.save(update_fields=['update_channel'])

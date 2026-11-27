@@ -27,6 +27,10 @@ def dispatch_rollout_campaign(campaign, *, now):
         # Lock all approved endpoints, not just candidates, to freeze occupancy too.
         lock_lifecycle_endpoints(campaign.targets.filter(eligibility_at_selection=True).values('endpoint_id'))
         AgentRelease.objects.select_for_update().get(pk=campaign.release_id)
+        if campaign.release_snapshot.get('stable_coverage_origin_id'):
+            from .stable_coverage import latest_stable_release_id
+            if latest_stable_release_id() != campaign.release_id:
+                raise PolicyContractError('stable_catch_up_release_no_longer_applicable', status=409)
         list(AgentReleaseSigningKey.objects.select_for_update().filter(key_id=campaign.release.signature_key_id))
         plan = build_rollout_dispatch_plan(campaign, now=now, wave_id=wave.pk)
         selected = plan['selected_for_dispatch']

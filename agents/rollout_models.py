@@ -2,6 +2,7 @@
 import uuid
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -70,6 +71,10 @@ class AgentRolloutCoverageRound(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     campaign = models.ForeignKey(AgentRolloutCampaign, on_delete=models.PROTECT, related_name='coverage_rounds')
+    execution_campaign = models.OneToOneField(
+        AgentRolloutCampaign, null=True, blank=True, on_delete=models.PROTECT,
+        related_name='source_coverage_round',
+    )
     sequence = models.PositiveIntegerField()
     purpose = models.CharField(max_length=20, choices=PURPOSE_CHOICES, default=PURPOSE_CATCH_UP)
     state = models.CharField(max_length=20, choices=STATE_CHOICES, default=STATE_RECORDED)
@@ -86,11 +91,21 @@ class AgentRolloutCoverageRound(models.Model):
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='stable_coverage_rounds_created')
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def clean(self):
+        super().clean()
+        if self.execution_campaign_id and (
+            self.execution_campaign_id == self.campaign_id
+            or self.execution_campaign.release_id != self.campaign.release_id
+        ):
+            raise ValidationError({'execution_campaign': 'Expected a separate campaign for the same release.'})
+
     class Meta:
         app_label = 'agents'
         ordering = ['campaign_id', 'sequence']
         constraints = [
             models.UniqueConstraint(fields=['campaign', 'sequence'], name='rollout_coverage_round_sequence'),
+            models.CheckConstraint(condition=~models.Q(execution_campaign=models.F('campaign')),
+                                   name='rollout_coverage_distinct_executor'),
             models.CheckConstraint(condition=models.Q(sequence__gte=1), name='rollout_coverage_round_positive'),
             models.CheckConstraint(condition=models.Q(total_candidates=models.F('eligible_count') + models.F('excluded_count') + models.F('already_current_count')), name='rollout_coverage_round_counts'),
         ]
