@@ -54,3 +54,11 @@ Os testes cobrem flag padrão desligada com job mantido na fila sem despacho, ma
 - Definir antes da homologação a política Authenticode e confirmar a identidade/privilégios do serviço Windows.
 
 Até B2 e homologação, manter o despacho desabilitado. Nenhuma operação real ou publicação de agente foi realizada por B1.
+
+## Fechamento PR #82 e continuidade B2 — 27/11/2026
+
+A PR [#82](https://github.com/Gabriel-J-Oliveira/rmm_project/pull/82) foi **integrada** em `main 54bda321be6a91d5369d134d841c24130a644947`, após corrigir dois problemas de revisão: importar `re` em `validate_software_operation_completion` e rejeitar/auditar novos resultados de operações v2 ainda `queued`. Só estados `sent`/`running` recebem novo resultado; replay de ACK já registrado continua idempotente. [CI final 46012576544](https://github.com/Gabriel-J-Oliveira/rmm_project/actions/runs/46012576544): SQLite, PostgreSQL concorrente, contrato Windows, navegador e Windows .NET/terminal 5/5. Migration `agents.0062_rc49_software_package_operations` integra a main, mas aplicação em produção **não foi confirmada/autorizada**.
+
+A evolução [RC49-03C-B2, PR #84](https://github.com/Gabriel-J-Oliveira/rmm_project/pull/84) **já está implementada em branch**, HEAD `8f5fc0d25f4e3acd7b349950fd1585522555651d`, CI [46019901096](https://github.com/Gabriel-J-Oliveira/rmm_project/actions/runs/46019901096) 5/5. Contém executor MSI tipado (install/update/uninstall), perfil autenticado vinculado a job, download em streaming, staging protegido, validação tamanho/hash/AuthentiCode com pin de publisher, `msiexec` sem shell, ProductCode/versão e journal/retomada, 3010 como reboot pendente. **Não está merged, publicado nem homologado com instalação MSI real**; testes são sintéticos. Review deve confirmar assinatura/publisher pin, privilégio Windows, replays, interrupção, capabilities e compatibilidade do v1; coordenar `agents/views.py` com Codex 1 PR #83.
+
+A seguir, 03C-C EXE e 03C-D atualização/remoção/reconciliação em escala e interface, com homologação operacional posterior ao fechamento do desenvolvimento da RC49. Handoff [central](rc49-handoff-contexto-20261127.md) e [Codex 2](rc49-codex2-handoff-20261127.md). Despacho permanece `NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=False` por default; integração de código não liga a flag.
