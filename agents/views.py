@@ -151,6 +151,10 @@ def _update_agent_dispatch_block_reason(job, endpoint, release, campaigns, waves
             return 'campaign_binding_missing'
         if campaign.release_snapshot.get('stable_desktop_profile'):
             from .stable_rollout import enabled as stable_enabled
+            if hasattr(campaign, 'source_coverage_round'):
+                from .stable_coverage import latest_stable_release_id
+                if latest_stable_release_id() != release.pk:
+                    return 'stable_catch_up_release_no_longer_applicable'
             if (campaign.state == 'paused' or wave.state == 'paused' or release.rollout_paused
                     or release.rollout_percentage != 100 or not stable_enabled(release.channel)
                     or not settings.NIGHTOWL_ROLLOUT_ORCHESTRATOR_ENABLED or not settings.NIGHTOWL_AUTOMATIC_ROLLOUT_ENABLED):

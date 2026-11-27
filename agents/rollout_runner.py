@@ -8,6 +8,7 @@ from .fleet_policy import PolicyContractError
 from .models import AgentRolloutCampaign
 from .rollout_dispatch import dispatch_rollout_campaign
 from .rollout_planning import rollout_orchestration_enabled
+from .stable_coverage import discover_stable_coverage
 
 RUNNER_LOCK_ID = 564987321
 
@@ -42,6 +43,12 @@ def run_rollout_round(*, now=None):
     with rollout_runner_lock() as acquired:
         if not acquired:
             return {'status': 'already_running', 'campaigns': []}
+        coverage = None
+        try:
+            if round_id := discover_stable_coverage(now=now):
+                coverage = {'round_id': round_id}
+        except PolicyContractError as exc:
+            coverage = {'status': 'blocked', 'reason_code': str(exc)}
         ids = list(AgentRolloutCampaign.objects.filter(state='running', current_wave__state='running').order_by('pk').values_list('pk', flat=True))
         summaries = []
         for pk in ids:
@@ -50,4 +57,7 @@ def run_rollout_round(*, now=None):
                 summaries.append({key: result[key] for key in ('campaign_id', 'wave_id', 'created_count', 'job_ids')})
             except PolicyContractError as exc:
                 summaries.append({'campaign_id': str(pk), 'status': 'blocked', 'reason_code': str(exc)})
-        return {'status': 'completed', 'campaigns': summaries}
+        result = {'status': 'completed', 'campaigns': summaries}
+        if coverage is not None:
+            result['stable_coverage'] = coverage
+        return result

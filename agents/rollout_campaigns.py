@@ -58,7 +58,7 @@ def wave_contract(plan, eligible, minimum):
     return result, used
 
 
-def create_agent_rollout_campaign_from_preview(release, data, actor, *, now=None):
+def create_agent_rollout_campaign_from_preview(release, data, actor, *, now=None, endpoints=None):
     authorize(actor)
     if not isinstance(data, dict):
         raise PolicyContractError('invalid_contract')
@@ -87,7 +87,8 @@ def create_agent_rollout_campaign_from_preview(release, data, actor, *, now=None
             release = AgentRelease.objects.select_for_update().get(pk=release.pk)
             if AgentReleaseGroup.objects.filter(pk__in=groups).count() != len(groups):
                 raise PolicyContractError('unknown_group')
-            preview = build_agent_rollout_preview(release, target_group_ids=groups, freshness_seconds=freshness, now=now)
+            preview = build_agent_rollout_preview(release, endpoints=endpoints, target_group_ids=groups,
+                                                  freshness_seconds=freshness, now=now)
             if preview['cohort_hash'] != data['expected_cohort_hash'] or preview['cohort_schema'] != data['cohort_schema']:
                 raise PolicyContractError('preview_changed', status=409, plan=preview)
             if AgentRolloutCampaign.objects.filter(release=release).exclude(state__in=['completed', 'aborted']).exists():
