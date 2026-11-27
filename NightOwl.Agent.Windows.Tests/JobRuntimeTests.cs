@@ -206,6 +206,7 @@ internal static class JobRuntimeTests
             Check(JsonSerializer.Serialize(result).Contains("\"reboot_required\":true") && calls==1,"Synthetic confirmation/reboot contract failed.");
             await executor.InstallAsync(config,"synthetic",CancellationToken.None);
             Check(calls==1,"Already installed package executed twice.");
+            await SoftwareMsiV2Tests.RunAsync();
         }
         finally{Directory.Delete(root,true);}
     }

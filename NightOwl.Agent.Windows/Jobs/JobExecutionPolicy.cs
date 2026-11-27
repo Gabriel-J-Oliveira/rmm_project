@@ -134,10 +134,13 @@ public sealed class JobExecutionPolicy
 
     public static int ResolveTimeoutSeconds(AgentJobRequest job)
     {
-        TimeSpan fallback = GetDefaultTimeout(job.Type);
+        TimeSpan fallback = job.Type.Equals("install_software", StringComparison.OrdinalIgnoreCase)
+            && StrictInt(job.Payload, "schema_version", 1) == 2
+                ? TimeSpan.FromSeconds(1800) : GetDefaultTimeout(job.Type);
         int requested = job.TimeoutSeconds <= 0 ? (int)fallback.TotalSeconds : job.TimeoutSeconds;
         int min = 5;
         int max = job.Type.Equals("operational_action", StringComparison.OrdinalIgnoreCase) ? OperationalActions.MaxTimeoutSeconds :
+            job.Type.Equals("install_software", StringComparison.OrdinalIgnoreCase) && StrictInt(job.Payload, "schema_version", 1) == 2 ? 1800 :
             job.Type.Equals("windows_update_scan", StringComparison.OrdinalIgnoreCase) ? 900 :
             job.Type.Equals("force_inventory", StringComparison.OrdinalIgnoreCase) || job.Type.Equals("collect_software", StringComparison.OrdinalIgnoreCase) ? 300 :
             job.Type.Equals("collect_logs", StringComparison.OrdinalIgnoreCase) ? 180 :
@@ -232,6 +235,20 @@ public sealed class JobExecutionPolicy
                     throw new InvalidOperationException("Invalid service details flag.");
                 break;
             case "install_software":
+                if (StrictInt(p, "schema_version", 1) == 2)
+                {
+                    EnsureAllowedFields(p, "schema_version", "operation_id", "operation", "request_id", "package_uuid",
+                        "artifact_sha256", "artifact_revision", "profile_revision", "profile_sha256");
+                    if (p.Count != 9 || !Guid.TryParseExact(GetString(p, "operation_id", ""), "D", out _)
+                        || !Guid.TryParseExact(GetString(p, "request_id", ""), "D", out _)
+                        || !Guid.TryParseExact(GetString(p, "package_uuid", ""), "D", out _)
+                        || GetString(p, "operation", "") is not ("install" or "update" or "uninstall")
+                        || !Regex.IsMatch(GetString(p, "artifact_sha256", ""), "^[0-9a-f]{64}$")
+                        || !Regex.IsMatch(GetString(p, "profile_sha256", ""), "^[0-9a-f]{64}$")
+                        || StrictInt(p, "artifact_revision", 0) < 1 || StrictInt(p, "profile_revision", 0) < 1)
+                        throw new InvalidOperationException("Invalid versioned software operation envelope.");
+                    break;
+                }
                 EnsureAllowedFields(p,"package_id");
                 if(!Regex.IsMatch(GetString(p,"package_id",""),"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$"))
                     throw new InvalidOperationException("Invalid package identity.");

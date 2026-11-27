@@ -16,15 +16,18 @@ public sealed class JobExecutor
     private readonly JobExecutionPolicy _policy;
     private readonly TelemetryConfigurationService? _telemetryConfiguration;
     private readonly OperationalActions _operationalActions;
+    private readonly AgentApiClient? _api;
 
     public JobExecutor(WindowsInventoryCollector collector, JsonlLogger logger, JobExecutionPolicy policy,
-        TelemetryConfigurationService? telemetryConfiguration = null, OperationalActions? operationalActions = null)
+        TelemetryConfigurationService? telemetryConfiguration = null, OperationalActions? operationalActions = null,
+        AgentApiClient? api = null)
     {
         _collector = collector;
         _logger = logger;
         _policy = policy;
         _telemetryConfiguration = telemetryConfiguration;
         _operationalActions = operationalActions ?? new OperationalActions();
+        _api = api;
     }
 
     public async Task<JobExecutionResult> ExecuteAsync(AgentConfig config, AgentJobRequest job, CancellationToken ct)
@@ -69,6 +72,23 @@ public sealed class JobExecutor
 
         try
         {
+            if (job.Type == "install_software" && GetPayloadInt(job, "schema_version", 1) == 2)
+            {
+                SoftwareInstallation installation = new();
+                JobExecutionResult operationResult = _api is null
+                    ? new JobExecutionResult { JobId = job.Id, Status = "failed", StartedAt = started,
+                        FinishedAt = DateTimeOffset.UtcNow, ExitCode = 1, Stdout = "", Stderr = "", ErrorMessage = "",
+                        Result = new { type = "install_software", error_code = "SOFTWARE_TRANSPORT_UNAVAILABLE", machine_id = config.MachineId } }
+                    : await installation.ExecuteV2Async(config, job, _api, started, jobToken, ct);
+                stopwatch.Stop();
+                operationResult = LimitResult(config, job, operationResult);
+                _policy.MarkFinal(config, job, operationResult, ExtractErrorCode(operationResult));
+                await _logger.LogAsync(operationResult.Status == "completed" ? "job.completed" : "job.failed",
+                    "Typed MSI operation finished.", BuildJobLog(job, operationResult.Status, ExtractErrorCode(operationResult),
+                        operationResult.DurationSeconds, decision.TimeoutSeconds), ct,
+                    operationResult.Status == "completed" ? "info" : "warning");
+                return operationResult;
+            }
             if (job.Type == "configure_telemetry")
             {
                 if (_telemetryConfiguration is null) throw new InvalidOperationException("Telemetry configuration unavailable.");

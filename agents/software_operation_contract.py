@@ -113,6 +113,7 @@ def prepare_software_operation_snapshot(operator, endpoint_id, package_id, opera
             'artifact_approved_at': package.approved_at.isoformat(),
             'artifact_approved_by': str(package.approved_by_id),
             'artifact_sha256': package.sha256, 'artifact_revision': package.artifact_revision,
+            'size_bytes': package.size_bytes,
             'profile_revision': package.execution_profile_revision,
             'profile_sha256': package.execution_profile_sha256,
             'profile_status': package.execution_profile_status,
@@ -285,6 +286,8 @@ def validate_software_operation_dispatch(job, *, endpoint=None):
             or str(package.execution_profile_approved_by_id) != record.snapshot.get('package', {}).get('profile_approved_by')
             or not package_profile_binding_matches(package)
             or package.sha256 != record.artifact_sha256
+            or ('size_bytes' in record.snapshot.get('package', {})
+                and package.size_bytes != record.snapshot['package'].get('size_bytes'))
             or package.artifact_revision != record.artifact_revision
             or package.execution_profile_revision != record.profile_revision
             or package.execution_profile_sha256 != record.profile_sha256
@@ -340,16 +343,62 @@ def validate_software_operation_download(machine, job_id):
         raise
 
 
+@transaction.atomic
+def validate_software_operation_profile(machine, job_id):
+    """Resolve an immutable execution profile only for its dispatched endpoint job."""
+    from .internal_jobs import validate_internal_payload
+
+    job = AgentJob.objects.select_for_update().select_related('endpoint').filter(
+        pk=job_id, endpoint=machine, job_type=AgentJob.TYPE_INSTALL_SOFTWARE,
+        status__in=(AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING),
+    ).first()
+    if job is None:
+        raise SoftwareOperationBlocked('software_operation_not_found')
+    machine = AgentMachine.objects.select_for_update().get(pk=machine.pk)
+    record = SoftwarePackageOperation.objects.select_for_update().select_related('package').filter(job=job).first()
+    if record is None:
+        raise SoftwareOperationBlocked('software_operation_not_found')
+    record = validate_software_operation_dispatch(job, endpoint=machine)
+    if not isinstance(job.payload, dict) or validate_internal_payload(job.job_type, job.payload) != job.payload:
+        raise SoftwareOperationBlocked('software_operation_payload_invalid')
+    package_snapshot = record.snapshot.get('package', {}) if isinstance(record.snapshot, dict) else {}
+    profile = package_snapshot.get('profile')
+    if not isinstance(profile, dict):
+        raise SoftwareOperationBlocked('software_operation_profile_missing')
+    detection = profile.get('detection', {})
+    product_code = detection.get('product_code')
+    expected_version = profile.get('expected_version')
+    if (detection.get('method') != 'msi_product_code'
+            or not isinstance(product_code, str) or not isinstance(expected_version, str)
+            or (package_snapshot.get('size_bytes', record.package.size_bytes) is None)):
+        raise SoftwareOperationBlocked('software_operation_profile_invalid')
+    return job, record, {
+        'schema_version': SOFTWARE_JOB_SCHEMA_VERSION,
+        'operation_id': str(record.pk), 'operation': record.operation,
+        'request_id': str(record.request_id), 'package_uuid': str(record.package_id),
+        'artifact_sha256': record.artifact_sha256,
+        'artifact_revision': record.artifact_revision,
+        'profile_revision': record.profile_revision, 'profile_sha256': record.profile_sha256,
+        'size_bytes': package_snapshot.get('size_bytes', record.package.size_bytes), 'product_code': product_code,
+        'expected_version': expected_version, 'profile': profile,
+        'machine_id': record.machine_id_snapshot,
+    }
+
+
 def validate_software_operation_completion(job, result):
     """Accept completed status only with a strict, versioned installed-state proof."""
     if not isinstance(result, dict) or result.get('machine_id') != job.endpoint.machine_id \
             or result.get('output_truncated'):
         raise ValueError('software_operation_identity_invalid')
-    if set(result) - {'machine_id', 'output', 'output_truncated', 'error_code'}:
+    # JobExecutor.LimitResult serializes this exact envelope. agent_version is
+    # metadata from the authenticated agent, not part of the operation proof,
+    # but it must be accepted and bounded rather than silently stripping it.
+    if set(result) != {'machine_id', 'output', 'output_truncated', 'agent_version'}:
         raise ValueError('software_operation_result_fields_invalid')
-    if result.get('error_code') not in (None, '') and not re.fullmatch(
-            r'[A-Z][A-Z0-9_]{0,79}', str(result.get('error_code')), re.ASCII):
-        raise ValueError('software_operation_error_code_invalid')
+    agent_version = result.get('agent_version')
+    if (not isinstance(agent_version, str) or not agent_version or len(agent_version) > 50
+            or any(ord(char) < 32 or ord(char) == 127 for char in agent_version)):
+        raise ValueError('software_operation_agent_version_invalid')
     payload = job.payload if isinstance(job.payload, dict) else {}
     output = result.get('output')
     fields = {
@@ -397,3 +446,63 @@ def validate_software_operation_completion(job, result):
         valid_state = evidence['installed'] is True and evidence['version'] == expected_version
     if not valid_state:
         raise ValueError('software_operation_evidence_mismatch')
+
+
+def validate_software_operation_failure(job, result):
+    """Validate the agent's serialized failure envelope and return its stable error code."""
+    if not isinstance(result, dict) or result.get('machine_id') != job.endpoint.machine_id:
+        raise ValueError('software_operation_identity_invalid')
+    agent_version = result.get('agent_version')
+    if (not isinstance(agent_version, str) or not agent_version or len(agent_version) > 50
+            or any(ord(char) < 32 or ord(char) == 127 for char in agent_version)):
+        raise ValueError('software_operation_agent_version_invalid')
+
+    output = result.get('output')
+    if set(result) == {'machine_id', 'output', 'output_truncated', 'agent_version'}:
+        if result.get('output_truncated') is not False or not isinstance(output, dict):
+            raise ValueError('software_operation_result_fields_invalid')
+        if set(output) == {'schema_version', 'operation_id', 'operation', 'request_id', 'package_uuid',
+                           'artifact_sha256', 'artifact_revision', 'profile_revision', 'profile_sha256',
+                           'phase', 'verified', 'success', 'error_code', 'exit_code', 'reboot_pending', 'evidence'}:
+            payload = job.payload if isinstance(job.payload, dict) else {}
+            for key in ('schema_version', 'operation_id', 'operation', 'request_id', 'package_uuid',
+                        'artifact_sha256', 'artifact_revision', 'profile_revision', 'profile_sha256'):
+                if output.get(key) != payload.get(key):
+                    raise ValueError('software_operation_confirmation_mismatch')
+            if (type(output.get('schema_version')) is not int or output['schema_version'] != SOFTWARE_JOB_SCHEMA_VERSION
+                    or output.get('verified') is not False or output.get('success') is not False
+                    or not isinstance(output.get('phase'), str) or output['phase'] not in {
+                        'profile', 'download', 'signature', 'precondition', 'msiexec', 'verification'
+                    }
+                    or type(output.get('exit_code')) is not int or output['exit_code'] < 0
+                    or type(output.get('reboot_pending')) is not bool
+                    or not isinstance(output.get('evidence'), dict)
+                    or set(output['evidence']) != {'method', 'product_code', 'version', 'installed'}
+                    or output['evidence'].get('method') != 'msi_product_code'
+                    or output['evidence'].get('installed') is not False
+                    or output['evidence'].get('product_code') != '' or output['evidence'].get('version') != ''):
+                raise ValueError('software_operation_failure_invalid')
+            error_code = output.get('error_code')
+        elif set(output) in (
+            {'type', 'error_code', 'phase'},
+            {'type', 'error_code', 'machine_id'},
+        ):
+            if output.get('type') != 'install_software':
+                raise ValueError('software_operation_failure_invalid')
+            if 'machine_id' in output and output['machine_id'] != job.endpoint.machine_id:
+                raise ValueError('software_operation_identity_invalid')
+            error_code = output.get('error_code')
+        else:
+            raise ValueError('software_operation_failure_invalid')
+    elif set(result) == {'type', 'error_code', 'message', 'output', 'agent_version', 'machine_id'}:
+        # JobExecutionPolicy may reject a v2 job before LimitResult is called.
+        if (result.get('type') != 'install_software' or not isinstance(result.get('message'), str)
+                or len(result['message']) > 1000):
+            raise ValueError('software_operation_failure_invalid')
+        error_code = result.get('error_code')
+    else:
+        raise ValueError('software_operation_result_fields_invalid')
+
+    if not isinstance(error_code, str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,79}', error_code, re.ASCII):
+        raise ValueError('software_operation_error_code_invalid')
+    return error_code

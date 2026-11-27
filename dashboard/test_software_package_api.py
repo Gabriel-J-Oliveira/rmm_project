@@ -749,7 +749,8 @@ class SoftwarePackageApiTests(TransactionTestCase):
             url = reverse('agent-jobs-result')
             base = {'job_id': str(operation.job_id), 'machine_id': endpoint.machine_id,
                     'status': 'completed', 'result': {'machine_id': endpoint.machine_id, 'output': valid,
-                                                       'error_code': 'MSI_VERIFICATION_RECORDED'}}
+                                                       'output_truncated': False,
+                                                       'agent_version': '0.1.1.0-rc48'}}
             invalid = {**base, 'result': {'machine_id': endpoint.machine_id,
                       'output': {'schema_version': 2, 'success': True, 'exit_code': 0}}}
             rejected = agent.post(url, invalid, content_type='application/json', HTTP_IDEMPOTENCY_KEY='software-ack-invalid')
@@ -808,7 +809,7 @@ class SoftwarePackageApiTests(TransactionTestCase):
             result_id__in=['software-queued-success', 'software-queued-failure'],
         ).exists())
 
-    def test_dispatched_software_operation_accepts_valid_error_code_and_replay(self):
+    def test_dispatched_software_operation_accepts_serialized_agent_envelope_and_replay(self):
         from uuid import uuid4
         package = self._approved_profile_package()
         endpoint = self._endpoint_with_software_capability()
@@ -834,7 +835,7 @@ class SoftwarePackageApiTests(TransactionTestCase):
                 'job_id': str(operation.job_id), 'machine_id': endpoint.machine_id,
                 'status': 'completed',
                 'result': {'machine_id': endpoint.machine_id, 'output': evidence,
-                           'error_code': 'MSI_VERIFICATION_RECORDED'},
+                           'output_truncated': False, 'agent_version': '0.1.1.0-rc48'},
             }
             url = reverse('agent-jobs-result')
             ack = agent.post(url, ack_payload, content_type='application/json',

@@ -17,6 +17,14 @@ public sealed class AgentConfig
     [JsonPropertyName("softwareCatalogSha256")]
     public string SoftwareCatalogSha256 { get; set; } = "";
 
+    // Versioned MSI operations are independent of the legacy catalog gate and remain off by default.
+    [JsonPropertyName("softwareMsiOperationsEnabled")]
+    public bool SoftwareMsiOperationsEnabled { get; set; }
+    [JsonPropertyName("softwareMsiTrustedPublisherSha256")]
+    public List<string> SoftwareMsiTrustedPublisherSha256 { get; set; } = new();
+    [JsonPropertyName("softwareMsiMaxArtifactBytes")]
+    public long SoftwareMsiMaxArtifactBytes { get; set; } = 1024L * 1024 * 1024;
+
     [JsonPropertyName("machineId")]
     public string MachineId { get; set; } = "";
 

@@ -21,7 +21,7 @@ from .terminal_sessions import TerminalOperatorView, TerminalCancelView, Termina
 from .operational_actions import OperationalActionView
 from .script_library import ApprovedScriptCatalogView
 from .service_manager import ServiceManagerAvailabilityView, ServiceManagerJobView, ServiceManagerActionView
-from .software_operation_views import AgentSoftwareOperationArtifactView
+from .software_operation_views import AgentSoftwareOperationArtifactView, AgentSoftwareOperationProfileView
 
 urlpatterns = [
     path('terminal/admin-grants/<uuid:endpoint_id>/', AdminTerminalGrantView.as_view(), name='terminal-admin-grant'),
@@ -68,4 +68,6 @@ urlpatterns = [
     path('jobs/result/', AgentJobsResultView.as_view(), name='agent-jobs-result'),
     path('software-operations/jobs/<uuid:job_id>/artifact/',
          AgentSoftwareOperationArtifactView.as_view(), name='agent-software-operation-artifact'),
+    path('software-operations/jobs/<uuid:job_id>/profile/',
+         AgentSoftwareOperationProfileView.as_view(), name='agent-software-operation-profile'),
 ]
