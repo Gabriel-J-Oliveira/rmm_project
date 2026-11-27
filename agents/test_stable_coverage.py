@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from threading import Event
 from unittest import skipUnless
 from unittest.mock import patch
@@ -9,11 +10,11 @@ from django.test import TestCase, TransactionTestCase, override_settings
 
 from . import test_stable_rollout as fixtures
 from .fleet_policy import PolicyContractError
-from .models import AgentJob, AgentRelease, AgentRolloutCampaign, AgentRolloutCoverageRound, AuditEvent
-from .rollout_campaigns import transition_campaign, transition_wave
+from .models import AgentJob, AgentRelease, AgentReleaseGroup, AgentRolloutCampaign, AgentRolloutCoverageRound, AuditEvent
+from .rollout_campaigns import create_agent_rollout_campaign_from_preview, transition_campaign, transition_wave
 from .rollout_dispatch import dispatch_rollout_campaign
 from .rollout_runner import run_rollout_round
-from .services import publish_agent_release
+from .services import build_agent_rollout_preview, publish_agent_release
 from .stable_coverage import discover_stable_coverage
 from .views import _update_agent_dispatch_block_reason
 
@@ -26,13 +27,29 @@ settings = override_settings(
 
 class CoverageFixture:
     clone = fixtures.StableRolloutTests.clone
+    scoped = False
 
     def setUp(self):
         fixtures.StableRolloutTests.setUp(self)
         AgentRelease.objects.filter(pk=self.release.pk).update(status='draft')
-        with patch('django.utils.timezone.now', return_value=self.now):
+        publication = patch('agents.stable_rollout.start_on_publication') if self.scoped else nullcontext()
+        with patch('django.utils.timezone.now', return_value=self.now), publication:
             self.release = publish_agent_release(self.release, self.actor, 'Synthetic Stable approval',
                                                  rollout_percentage=100, rollout_paused=False)
+        if not self.scoped:
+            self.original = AgentRolloutCampaign.objects.get(release=self.release)
+            return
+        self.scope = AgentReleaseGroup.objects.create(name='Authorized scope', slug='authorized-scope')
+        self.machine.rollout_groups.add(self.scope)
+        groups = [str(self.scope.pk)]
+        preview = build_agent_rollout_preview(self.release, now=self.now, target_group_ids=groups)
+        campaign = create_agent_rollout_campaign_from_preview(self.release, {
+            'cohort_schema': 1, 'expected_cohort_hash': preview['cohort_hash'],
+            'wave_plan': [{'remaining': True}], 'reason': 'Synthetic approval', 'target_group_ids': groups,
+        }, self.actor, now=self.now)
+        transition_campaign(campaign, 'running', self.actor, 'Synthetic start', now=self.now)
+        wave = transition_wave(campaign.waves.get(), 'ready', self.actor, 'Synthetic prepare', now=self.now)
+        transition_wave(wave, 'running', self.actor, 'Synthetic start', now=self.now)
         self.original = AgentRolloutCampaign.objects.get(release=self.release)
 
     def complete(self, campaign):
@@ -180,6 +197,20 @@ class StableCoverageTests(CoverageFixture, TestCase):
         self.assertEqual(AgentRolloutCampaign.objects.count(), 1)
         self.assertEqual(AuditEvent.objects.count(), before)
         self.assertTrue(self.discover())
+
+
+@settings
+class StableCoverageScopedTests(CoverageFixture, TestCase):
+    scoped = True
+
+    def test_catch_up_inherits_original_group_scope(self):
+        self.complete(self.original)
+        within = self.clone()
+        within.rollout_groups.add(self.scope)
+        self.clone()
+        record = AgentRolloutCoverageRound.objects.get(pk=self.discover())
+        self.assertEqual(record.execution_campaign.target_group_ids_snapshot, [str(self.scope.pk)])
+        self.assertEqual(list(record.execution_campaign.targets.values_list('endpoint_id', flat=True)), [within.pk])
 
 
 @settings

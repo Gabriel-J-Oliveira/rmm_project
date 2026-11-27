@@ -63,8 +63,12 @@ def discover_stable_coverage(*, now):
     candidates = AgentMachine.objects.filter(
         update_channel=AgentRelease.CHANNEL_STABLE, rollout_groups__slug=DESKTOP_GROUP,
     ).exclude(pk__in=covered)
+    groups = original.target_group_ids_snapshot
+    if groups:
+        candidates = candidates.filter(rollout_groups__id__in=groups).distinct()
     preview = build_agent_rollout_preview(release, endpoints=candidates, now=now,
-                                          freshness_seconds=original.freshness_seconds)
+                                          freshness_seconds=original.freshness_seconds,
+                                          target_group_ids=groups)
     last_seen = dict(candidates.values_list('pk', 'last_seen_at'))
     online = set(candidates.filter(status=AgentMachine.STATUS_ONLINE).values_list('pk', flat=True))
     allowed = {str(pk) for pk in release.allowed_groups.values_list('pk', flat=True)}
@@ -107,7 +111,8 @@ def discover_stable_coverage(*, now):
             last_seen_at__gte=now - timedelta(seconds=original.freshness_seconds),
         )
         execution_preview = build_agent_rollout_preview(
-            release, endpoints=endpoints, now=now, freshness_seconds=original.freshness_seconds)
+            release, endpoints=endpoints, now=now, freshness_seconds=original.freshness_seconds,
+            target_group_ids=groups)
         if execution_preview['eligible_count'] != len(selected) or latest_stable_release_id() != release.pk:
             raise PolicyContractError('stable_catch_up_selection_changed', status=409)
         executor = create_agent_rollout_campaign_from_preview(release, {
@@ -115,6 +120,7 @@ def discover_stable_coverage(*, now):
             'cohort_schema': execution_preview['cohort_schema'],
             'wave_plan': [{'remaining': True}],
             'freshness_seconds': original.freshness_seconds,
+            'target_group_ids': groups,
             'concurrency_limit': settings.NIGHTOWL_STABLE_DESKTOP_ROLLOUT_BATCH_SIZE,
             'minimum_observation_seconds': original.minimum_observation_seconds,
             'auto_pause_policy': original.auto_pause_policy,

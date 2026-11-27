@@ -29,3 +29,5 @@ aguardam heartbeat antes da seleção complementar. Nenhum retry automático é
 introduzido. Se a publicação não abriu campanha original, não há aprovação de
 campanha a reutilizar: o operador precisa aprovar uma primeira campanha pelo fluxo
 existente. O aprovador deve continuar autorizado a criar e alterar campanhas.
+Quando a campanha original foi aprovada para grupos específicos, as rodadas
+herdam esse mesmo recorte.
