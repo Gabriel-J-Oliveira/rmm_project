@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import re
 import uuid
 from datetime import timedelta
 
@@ -1957,6 +1958,21 @@ class AgentJobsResultView(APIView):
                         },
                         status=status.HTTP_200_OK,
                     )
+        if (job is not None and job.job_type == AgentJob.TYPE_INSTALL_SOFTWARE
+                and isinstance(job.payload, dict) and job.payload.get('schema_version') == 2
+                and job.status not in {AgentJob.STATUS_SENT, AgentJob.STATUS_RUNNING}):
+            create_audit_event(
+                event_type='job.result_rejected',
+                title='Resultado de operacao de software rejeitado',
+                description='Resultado recebido antes do despacho ou fora do estado operacional permitido.',
+                severity=AuditEvent.SEVERITY_WARNING,
+                actor_type=AuditEvent.ACTOR_AGENT,
+                actor_name='NightOwlAgent',
+                endpoint=machine,
+                metadata={'job_id': str(job.id), 'status': job_status,
+                          'job_status': job.status, 'reason': 'software_operation_not_dispatched'},
+            )
+            return Response({'error': 'software_operation_not_dispatched'}, status=status.HTTP_409_CONFLICT)
         if job:
             incoming_status = job_status if job_status in dict(AgentJob.STATUS_CHOICES) else AgentJob.STATUS_FAILED
             if job.job_type == 'operational_action' and incoming_status == AgentJob.STATUS_COMPLETED:

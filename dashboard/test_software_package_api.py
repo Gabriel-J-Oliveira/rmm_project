@@ -8,6 +8,7 @@ from threading import Barrier
 from unittest import skipUnless
 from uuid import UUID
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.core.exceptions import PermissionDenied
@@ -747,18 +748,105 @@ class SoftwarePackageApiTests(TransactionTestCase):
             }
             url = reverse('agent-jobs-result')
             base = {'job_id': str(operation.job_id), 'machine_id': endpoint.machine_id,
-                    'status': 'completed', 'result': {'machine_id': endpoint.machine_id, 'output': valid}}
+                    'status': 'completed', 'result': {'machine_id': endpoint.machine_id, 'output': valid,
+                                                       'error_code': 'MSI_VERIFICATION_RECORDED'}}
             invalid = {**base, 'result': {'machine_id': endpoint.machine_id,
                       'output': {'schema_version': 2, 'success': True, 'exit_code': 0}}}
             rejected = agent.post(url, invalid, content_type='application/json', HTTP_IDEMPOTENCY_KEY='software-ack-invalid')
             self.assertEqual(rejected.status_code, 400)
             self.assertFalse(AgentJobResultReceipt.objects.filter(result_id='software-ack-invalid').exists())
+            invalid_error = {**base, 'result': {**base['result'], 'error_code': 'invalid code!'}}
+            rejected_error = agent.post(url, invalid_error, content_type='application/json',
+                                        HTTP_IDEMPOTENCY_KEY='software-ack-invalid-error')
+            self.assertEqual(rejected_error.status_code, 400, rejected_error.content)
+            self.assertFalse(AgentJobResultReceipt.objects.filter(result_id='software-ack-invalid-error').exists())
             for _ in range(2):
                 ack = agent.post(url, base, content_type='application/json', HTTP_IDEMPOTENCY_KEY='software-ack-valid')
                 self.assertEqual(ack.status_code, 200, ack.content)
             operation.job.refresh_from_db()
             self.assertEqual(operation.job.status, AgentJob.STATUS_COMPLETED)
             self.assertEqual(AgentJobResultReceipt.objects.filter(result_id='software-ack-valid').count(), 1)
+
+    def test_queued_software_operation_rejects_success_and_failure_ack_when_dispatch_is_disabled(self):
+        from uuid import uuid4
+        package = self._approved_profile_package()
+        endpoint = self._endpoint_with_software_capability()
+        operation, _ = create_software_operation_job(
+            self.operator, endpoint.pk, package.pk, 'install', str(uuid4()),
+        )
+        self.assertFalse(settings.NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED)
+        agent = Client(HTTP_AUTHORIZATION=f'Bearer {endpoint.test_agent_token}')
+        success_evidence = {
+            'schema_version': 2, 'operation_id': str(operation.pk), 'operation': 'install',
+            'request_id': str(operation.request_id), 'package_uuid': str(package.pk),
+            'artifact_sha256': package.sha256, 'artifact_revision': package.artifact_revision,
+            'profile_revision': package.execution_profile_revision,
+            'profile_sha256': package.execution_profile_sha256, 'phase': 'verified',
+            'verified': True, 'success': True, 'exit_code': 0, 'reboot_pending': False,
+            'evidence': {'method': 'msi_product_code',
+                         'product_code': valid_msi_profile()['install']['product_code'],
+                         'version': valid_msi_profile()['expected_version'], 'installed': True},
+        }
+        url = reverse('agent-jobs-result')
+        success_ack = agent.post(url, {
+            'job_id': str(operation.job_id), 'machine_id': endpoint.machine_id,
+            'status': 'completed',
+            'result': {'machine_id': endpoint.machine_id, 'output': success_evidence},
+        }, content_type='application/json', HTTP_IDEMPOTENCY_KEY='software-queued-success')
+        self.assertEqual(success_ack.status_code, 409, success_ack.content)
+        self.assertEqual(success_ack.json()['error'], 'software_operation_not_dispatched')
+        failure_ack = agent.post(url, {
+            'job_id': str(operation.job_id), 'machine_id': endpoint.machine_id,
+            'status': 'failed', 'error_code': 'MSI_EXECUTION_FAILED',
+            'result': {'machine_id': endpoint.machine_id, 'error_code': 'MSI_EXECUTION_FAILED'},
+        }, content_type='application/json', HTTP_IDEMPOTENCY_KEY='software-queued-failure')
+        self.assertEqual(failure_ack.status_code, 409, failure_ack.content)
+        self.assertEqual(failure_ack.json()['error'], 'software_operation_not_dispatched')
+        operation.job.refresh_from_db()
+        self.assertEqual(operation.job.status, AgentJob.STATUS_QUEUED)
+        self.assertFalse(AgentJobResultReceipt.objects.filter(
+            result_id__in=['software-queued-success', 'software-queued-failure'],
+        ).exists())
+
+    def test_dispatched_software_operation_accepts_valid_error_code_and_replay(self):
+        from uuid import uuid4
+        package = self._approved_profile_package()
+        endpoint = self._endpoint_with_software_capability()
+        with override_settings(NIGHTOWL_SOFTWARE_OPERATION_DISPATCH_ENABLED=True):
+            operation, _ = create_software_operation_job(
+                self.operator, endpoint.pk, package.pk, 'install', str(uuid4()),
+            )
+            agent = Client(HTTP_AUTHORIZATION=f'Bearer {endpoint.test_agent_token}')
+            dispatched = agent.get(reverse('agent-jobs-pull'), HTTP_X_NIGHTOWL_JOB_PROTOCOL='2')
+            self.assertEqual(len(dispatched.json()['jobs']), 1)
+            evidence = {
+                'schema_version': 2, 'operation_id': str(operation.pk), 'operation': 'install',
+                'request_id': str(operation.request_id), 'package_uuid': str(package.pk),
+                'artifact_sha256': package.sha256, 'artifact_revision': package.artifact_revision,
+                'profile_revision': package.execution_profile_revision,
+                'profile_sha256': package.execution_profile_sha256, 'phase': 'verified',
+                'verified': True, 'success': True, 'exit_code': 0, 'reboot_pending': False,
+                'evidence': {'method': 'msi_product_code',
+                             'product_code': valid_msi_profile()['install']['product_code'],
+                             'version': valid_msi_profile()['expected_version'], 'installed': True},
+            }
+            ack_payload = {
+                'job_id': str(operation.job_id), 'machine_id': endpoint.machine_id,
+                'status': 'completed',
+                'result': {'machine_id': endpoint.machine_id, 'output': evidence,
+                           'error_code': 'MSI_VERIFICATION_RECORDED'},
+            }
+            url = reverse('agent-jobs-result')
+            ack = agent.post(url, ack_payload, content_type='application/json',
+                             HTTP_IDEMPOTENCY_KEY='software-valid-error-code')
+            self.assertEqual(ack.status_code, 200, ack.content)
+            replay = agent.post(url, ack_payload, content_type='application/json',
+                                HTTP_IDEMPOTENCY_KEY='software-valid-error-code')
+            self.assertEqual(replay.status_code, 200, replay.content)
+            self.assertTrue(replay.json()['duplicate'])
+            operation.job.refresh_from_db()
+            self.assertEqual(operation.job.status, AgentJob.STATUS_COMPLETED)
+            self.assertEqual(AgentJobResultReceipt.objects.filter(result_id='software-valid-error-code').count(), 1)
 
     def test_legacy_install_software_v1_payload_and_capability_contract_remain_unchanged(self):
         payload = {'package_id': 'legacy-package_1'}
