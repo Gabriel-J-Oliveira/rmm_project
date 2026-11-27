@@ -118,7 +118,7 @@ const {chromium} = require('playwright');
             exe.writeUInt16LE(2, 150);
             return exe;
         })()});
-        await drawer.locator('input[name="reason"]').fill('Substituição funcional de teste');
+        await drawer.locator('[data-package-form="replace"] input[name="reason"]').fill('Substituição funcional de teste');
         const replaceResponse = page.waitForResponse(response => response.url().includes('/software/packages/') && response.url().endsWith('/replace/') && response.request().method() === 'POST');
         await drawer.getByRole('button', {name: 'Substituir arquivo'}).click();
         assert.equal((await replaceResponse).status(), 200);
