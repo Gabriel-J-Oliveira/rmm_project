@@ -61,3 +61,7 @@ A mudança de esquema acrescenta campos ao `SoftwarePackageRecord` e permissões
 - Configuração de storage privado e `client_max_body_size`, espaço em disco, filesystem, backup, permissões, exposição via Nginx e download autenticado precisam de homologação do backend Linux antes de liberar operadores.
 - A remoção física após substituição/exclusão ocorre no `on_commit`; falhas de unlink deixam órfão privado e geram log sanitizado, sem quebrar a referência nova. Uma rotina operacional de reconciliação de órfãos poderá ser definida se a homologação demonstrar necessidade.
 - Nenhum pacote real foi carregado, aprovado, baixado ou distribuído; nenhuma migration foi aplicada em produção.
+
+## Nota de continuidade — 27/11/2026
+
+A 03B foi integrada pela PR #80; as menções acima a “03C futura” eram verdadeiras na data do incremento. Desde então, a PR #81 integrou perfis 03C-A, a #82 integrou API de operações/download autenticado pelo agente e ACK v2. A PR #84 implementa o executor MSI Windows 03C-B2 em branch aberta, com testes sintéticos 5/5, mas **sem merge, deploy, release assinada ou instalação real**. A aplicação operacional de migrations, storage privado e Nginx ainda precisa de confirmação na implantação. Consulte [handoff central](rc49-handoff-contexto-20261127.md).

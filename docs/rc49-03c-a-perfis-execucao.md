@@ -35,3 +35,7 @@ O perfil descreve a intenção por pacote, mas sua aprovação não prova compat
 6. Política operacional de permissões, autorização por endpoint, rollout piloto, gestão de falhas e rollback de versão do aplicativo.
 
 Antes da 03C-B, a versão RC49-03C-A da migration precisa estar aplicada em ambiente de validação, e deve haver teste de compatibilidade entre backend, versão/capabilities do agente e fluxo de distribuição. Não alterar produção nem agentes como parte desta PR.
+
+## Nota de continuidade — 27/11/2026
+
+Esta especificação documenta o incremento 03C-A da PR #81. A materialização `AgentJob` e o download autenticado passaram a existir na **main** pela #82 (03C-B1, migration 0062), com despacho desabilitado por padrão e ACK queued v2 bloqueado. O executor Windows MSI da B2 consta na **PR #84 aberta**, ainda sem merge/release assinada/instalação operacional. Consulte [handoff central](rc49-handoff-contexto-20261127.md), [B1](rc49-03c-b1-software-operations.md) e [Codex 2](rc49-codex2-handoff-20261127.md).
